@@ -42,7 +42,7 @@ HELP="
     ex: MEMCACHED_SERVERS=....
         MAILTO=....
         # limit lock concurrency with random sleep
-        * * *  * *  admin sleep \${RANDOM:0:1}; $0 -c -D 4 -l -- /path/to/cmd arg1 arg2
+        * * *  * *  admin sleep \${RANDOM:0:1}; $SELF -c -D 4 -l -- /path/to/cmd arg1 arg2
 "
 
 function _warn ()
@@ -107,7 +107,7 @@ function _create_memcache_lock ()
     $run memccp --add "$file"
 
     # remove tempFile XXX should we leave it for monit purpose and delete it at the end ?
-    _remove_file "$file"
+    # _remove_file "$file"
 
     # random sleep
     $run sleep 1.${RANDOM:0:1}
@@ -132,7 +132,7 @@ function _remove_memcache_lock ()
     # if newExpire > 0, let memcache server delete $lockName, else, remove it now.
     (( newExpire > 0 )) && $run memctouch --expire $newExpire "$lockName" || $run memcrm "$lockName"
 
-    # this should have been done before, but migth be interresting for monit purpose.
+    # this file was for monitoring purpose.
     _remove_file "$file"
 }
 
