@@ -2,7 +2,8 @@
 
 # use memcerror(1)
 # implement a quiet mode
-# XXX move _create_file _after_ memecexist
+# TODO we need a pre-run lockFile that can be monitored in case of stalled lock in memcache
+#      add createTimestamp in lockValue ?
 
 # use a no-milk-today.sh mecanism
 
@@ -95,10 +96,10 @@ function _create_memcache_lock ()
 
         if [[ "$tmp" == "$content" ]]
         then
+            # pgrep && _warn ?
+            #
             # create a failed file
             $run _create_failedfile "$failedFile" "$cmdLineStr"
-            # create tmpLockFile for monitoring purpose, this file could warn us if a lock stalled in memcache.
-            _create_file "$file" "$content"
             # and quit.
             _quit "not running '$cmdLineStr' because lock '$lockName' exists on this node ($HOSTNAME). exiting."
 
