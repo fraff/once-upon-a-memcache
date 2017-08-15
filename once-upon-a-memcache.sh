@@ -186,7 +186,7 @@ done
 cmdLineStr="$*"
 cmdLineArr=("$@")
 
-# [[ -x "${cmdLineArr[0]}" ]] || _quit "$SELF: ${cmdLineArr[0]}: No such file or not executable."
+# command -v "${cmdLineArr[0]}" >/dev/null || _quit "$SELF: ${cmdLineArr[0]}: No such file or not executable."
 [[ "$newExpire" == *[![:digit:]]* ]] && _quit "$SELF: $newExpire: Invalid number"
 [[ "$MEMCACHED_SERVERS" ]] || _quit "$SELF: please, set MEMCACHED_SERVERS first."
 [[ "$HOSTNAME" ]] || _quit "$SELF: \$HOSTNAME must be defined for this script to work"
