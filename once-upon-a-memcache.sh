@@ -2,10 +2,12 @@
 
 # use memcerror(1)
 # implement a quiet mode
-# TODO we need a pre-run lockFile that can be monitored in case of stalled lock in memcache
-#      add createTimestamp in lockValue ?
-
 # use a no-milk-today.sh mecanism
+
+# FIXME use ONCE_UPON_A_MEMCACHE_{LOCK,LOG,FAILED} instead of ONCE_UPON_A_{LOCK,LOG,FAILED}_MEMCACHE
+# add _TIMEOUT
+
+# add a checkSetup option, create, test, delete lockFile
 
 SELF="${BASH_SOURCE[0]##*/}"
 NAME="${SELF%.sh}"
@@ -13,24 +15,27 @@ NAME="${SELF%.sh}"
 failedDir="/var/tmp/$NAME"
 lockDir="$failedDir"
 logDir="/var/log/crons"
-lockValue="$HOSTNAME"
+printf -v nowStamp "%(%s)T" -1
 
-OPTS="cCD:feEhlLstx"
+OPTS="cCD:feEhlLstw:W:x"
 USAGE="Usage: $SELF [$OPTS] [--] <cmdline> [arg] [...]"
 HELP="
   $USAGE
 
         -c       clean last failedFile on success
         -C       clean lock and exit, usefull incase of stalled lock, use with caution
-        -D <s>   delete lock <s> seconds after <cmdline> to be sure it won't be serialized on multiple machines
+        -D <s>   set lock expiration to <s> seconds on exit.
         -f       force, do not check/create lock, remove it on exit, use with caution
         -e       bash set -e
         -E       prompt on error
         -h       this help
+        -i       TODO: case insensitive
         -l       log to $logDir/<cmdline>.log (default: stdout, stderr)
         -L       log append to $logDir/<cmdline>.log (default: stdout, stderr)
         -s       simul
         -t       simul
+        -W <s>   TODO warn if now - startTime > s
+        -w <s>   TODO warn if execution time < s
         -x       bash set -x
 
     if lock does not exist in memcache, create it, run <cmdline>, delete lock
@@ -44,7 +49,7 @@ HELP="
 
     ex: MEMCACHED_SERVERS=....
         # limit lock concurrency with random sleep
-        * * *  * *  admin sleep \${RANDOM:0:1}; $SELF -c -D 4 -l -- /path/to/cmd arg1 arg2
+        * * *  * *  admin sleep \${RANDOM:0:1}; $SELF -c -D 16 -L -- /path/to/cmd arg1 arg2
 "
 
 function _warn ()
@@ -62,7 +67,7 @@ function _create_file ()
 {
     local file="$1" content="$2"
 
-    echo "${content}" > "$file"
+    echo "$content" > "$file"
 }
 
 function _remove_file ()
@@ -72,64 +77,64 @@ function _remove_file ()
     $run rm -f "$file"
 }
 
-function _create_failedfile ()
-{
-    _create_file "$@"
-}
+# function _create_memcache_lock () {}
+# function _get_memcache_lock_content () {}
+# function _compare_memcache_lock_content () {}
 
-function _remove_failedfile ()
+function _try_create_memcache_lock ()
 {
-    _remove_file "$@"
-}
-
-function _create_memcache_lock ()
-{
-    local file="$1" content="$2" lockName tmp
+    local file="$1" localHost="$2" localStamp="$3" lockHost lockStamp lockName tmp retCode
 
     lockName="${file##*/}"
 
-    # does key exist ?
-    if memcexist "$lockName"
-    then
-        # does it contain "$content" ? if yes, it's already running
-        tmp="$(memccat $lockName)"
+    tmp=($(memccat "$lockName" 2>/dev/null))
+    retCode=$?
 
-        if [[ "$tmp" == "$content" ]]
+    # does key exist ? does it contains something
+    if [[ $retCode -eq 0 ]]
+    then
+
+        lockHost="${tmp[0]}" lockStamp="${tmp[1]}"
+        
+        # is this a valid format ?
+        [[ "${#tmp[*]}" -eq 2 ]] || _quit "Invalid lock content, expecting <host> <stamp>, got '${tmp[*]}', we should delete it"
+        [[ "$lockStamp" == *[![:digit:]]* ]] && _quit "Remote stamp is invalid, we should delete the lock."
+
+        (( lockWarn > 0 && localStamp - lockStamp > lockWarn )) && _warn "Warning: lock exists for $((localStamp - lockStamp))s"
+
+        if [[ "$lockHost" == "$localHost" ]]
         then
             # pgrep && _warn ?
             #
             # create a failed file
-            $run _create_failedfile "$failedFile" "$cmdLineStr"
+            $run _create_file "$failedFile" "$cmdLineStr"
             # and quit.
-            _quit "not running '$cmdLineStr' because lock '$lockName' exists on this node ($HOSTNAME). exiting."
+            _quit "not running '$cmdLineStr' because lock '$lockName' exists on this node ($localHost). exiting."
 
         else
             # lockFile exists but it's not on this node.
-            _warn "not running '$cmdLineStr' because lock '$lockName' exists on an other node (${tmp:-null}). exiting."
+            _warn "not running '$cmdLineStr' because lock '$lockName' exists on an other node ($lockHost). exiting."
             exit 0
         fi
     fi
 
     # create tmpLockFile.
-    _create_file "$file" "$content"
+    _create_file "$file" "$localHost $localStamp"
 
     # create lock in memcache server with name=$(basename $file), value=$(cat $file)
     # --add is for "do not overwrite"
-    $run memccp --add "$file" 2>/dev/null || _warn "Can't create $lockName on line $LINENO"
+    $run memccp --add "$file" 2>/dev/null || _warn "Can't create $lockName in memcache (code $?)."
 
-    # remove tmpLockFile XXX should we leave it for monit purpose and delete it at the end ?
-    # _remove_file "$file"
-
-    # random sleep
+    # pseudo random sleep
     $run sleep 1.${RANDOM:0:1}
 
-    # $lockName does not exist, something went wrong
-    $run memcexist "$lockName" || _quit "$SELF: memccp failed to create $lockName."
+    tmp=($(memccat "$lockName" 2>/dev/null))
+    retCode=$?
 
-    # does it still contain $content ?
-    tmp="$(memccat $lockName)"
+    lockHost="${tmp[0]}" lockStamp="${tmp[1]}"
 
-    [[ "$tmp" == "$content" ]]
+    # does it still contain what we've just written in it ?
+    [[ $retCode -eq 0 && "${tmp[*]}" == "$localHost $localStamp" ]]
 
     return $?
 }
@@ -147,7 +152,7 @@ function _remove_memcache_lock ()
     _remove_file "$file"
 }
 
-unset run setX setE doLog deleteFailedFileOnSuccess deleteLockAndExit force
+unset run setX setE doLog deleteFailedFileOnSuccess deleteLockAndExit force localWarn lockWarn
 
 newExpire=0
 
@@ -165,6 +170,8 @@ do
         L)    doLog=2                                               ;;
         s)    run=echo                                              ;;
         t)    run=echo                                              ;;
+        w)    lockWarn="$OPTARG"                                    ;;
+        W)    localWarn="$OPTARG"                                   ;;
         x)    setX="set -x"                                         ;;
         :)    _quit "$SELF: option -$OPTARG needs an argument."     ;;
         *)    _quit "  $USAGE"                                      ;;
@@ -188,6 +195,8 @@ cmdLineArr=("$@")
 
 # command -v "${cmdLineArr[0]}" >/dev/null || _quit "$SELF: ${cmdLineArr[0]}: No such file or not executable."
 [[ "$newExpire" == *[![:digit:]]* ]] && _quit "$SELF: $newExpire: Invalid number"
+[[ "$localWarn" == *[![:digit:]]* ]] && _quit "$SELF: $localWarn: Invalid number"
+[[ "$lockWarn" == *[![:digit:]]* ]] && _quit "$SELF: $lockWarn: Invalid number"
 [[ "$MEMCACHED_SERVERS" ]] || _quit "$SELF: please, set MEMCACHED_SERVERS first."
 [[ "$HOSTNAME" ]] || _quit "$SELF: \$HOSTNAME must be defined for this script to work"
 
@@ -211,14 +220,15 @@ fi
 # create $workingDir
 $run mkdir -m 1777 -p "$failedDir" "$lockDir"
 
+# FIXME from now until trap is defined, ctrl-C will leave lock forever
 # try to create a lock
-$force _create_memcache_lock "$lockFile" "$lockValue" || exit $?
-
-# delete failedFile on succes
-[[ "$deleteFailedFileOnSuccess" ]] && _remove_failedfile "$failedFile"
+$force _try_create_memcache_lock "$lockFile" "$HOSTNAME" "$nowStamp" || exit $?
 
 # remove lockFile on exit, and exit with $commandLineReturnCode
 trap '_remove_memcache_lock $lockFile; exit $commandLineReturnCode' EXIT
+
+# delete failedFile on succes
+[[ "$deleteFailedFileOnSuccess" ]] && _remove_file "$failedFile"
 
 # log stdout and stderr in $logFile
 (( doLog == 1 )) && $run exec &> $logFile
@@ -232,6 +242,9 @@ $run "${cmdLineArr[@]}"
 
 # return code, see trap EXIT above
 commandLineReturnCode=$?
+
+# self explain
+(( localWarn > 0 && $SECONDS < localWarn )) && _warn "Warning: script has been running less that ${localWarn}s"
 
 # one last for the road
 _warn "stopping: '$cmdLineStr' (exitCode: $commandLineReturnCode, duration: ~${SECONDS}s)"
