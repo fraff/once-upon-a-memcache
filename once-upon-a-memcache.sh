@@ -49,7 +49,7 @@ HELP="
 
     ex: MEMCACHED_SERVERS=....
         # limit lock concurrency with random sleep
-        * * *  * *  admin sleep \${RANDOM:0:1}; $SELF -c -D 16 -L -- /path/to/cmd arg1 arg2
+        * * *  * *  admin sleep \${RANDOM:0:1}; $SELF -c -D 16 -L -- nice -n 19 /path/to/cmd arg1 arg2
 "
 
 function _warn ()
